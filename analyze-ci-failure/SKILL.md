@@ -6,8 +6,11 @@ description: >
   CI fail", "why was my PR kicked out of the merge queue", "what's blocking this PR from
   merging", "explain this failed run", "which tests failed", or pastes a link to a failed
   workflow run or pull request. Also use it when the user mentions a red X on a PR, a dequeued
-  merge queue entry, or failing checks — even if they don't say "CI" explicitly. The skill
-  finds the actual blocking failure (filtering out optional/non-required workflows), extracts
+  merge queue entry, or failing checks — even if they don't say "CI" explicitly. If the user
+  names no run or PR (e.g. "why is CI failing?", "what's broken on my branch?"), it defaults
+  to the current git branch — checking whether that branch's PR was dequeued from the merge
+  queue, then the latest failed run on the branch. The skill finds the actual blocking failure
+  (filtering out optional/non-required workflows), extracts
   failed tests and error messages from logs, and handles merge queue runs.
 compatibility: Requires the `gh` CLI, authenticated (`gh auth status`).
 ---
@@ -45,8 +48,23 @@ not a list of every red X.
   and the current directory is a git repo, infer the repo with
   `gh repo view --json nameWithOwner -q .nameWithOwner`; otherwise ask the user for the repo.
   Go to Step 1.
+- **Nothing provided** (no run URL, no PR — e.g. "why is CI failing?", "what's broken on my
+  branch?"): default to the **current branch**. This needs a git repo checked out on a named
+  branch — if the working directory isn't one (or HEAD is detached), ask the user for a PR or
+  run instead. Resolve the repo, the branch, and the branch's PR (if any):
 
-## Step 1 (PR given): Find the run that actually matters
+  ```bash
+  gh repo view --json nameWithOwner -q .nameWithOwner          # OWNER/REPO
+  git branch --show-current                                    # HEAD_REF (empty if detached)
+  gh pr view --json number,headRefName,headRefOid,state,url 2>/dev/null  # the branch's PR, if any
+  ```
+
+  If a PR exists, set PR_NUMBER and HEAD_REF from it and go to **Step 1** — the merge-queue
+  dequeue check runs first, then branch CI, exactly as asked. If `gh pr view` finds no PR
+  (non-zero exit / empty), there's nothing in the merge queue to check: go straight to
+  **Step 1b** and diagnose the latest failed run on HEAD_REF.
+
+## Step 1 (PR in hand): Find the run that actually matters
 
 The user wants to know what's blocking *merging*. Two distinct failure surfaces exist:
 
@@ -95,6 +113,11 @@ gh run list -R OWNER/REPO --branch HEAD_REF --limit 20 \
 
 Only consider runs for the PR's current `headRefOid` unless none exist. If several workflows
 failed, apply the required-check filter (Step 3) before deciding which to dig into.
+
+When there's no PR (pure current-branch diagnosis), skip `gh pr checks` — it needs a PR — and
+use `gh run list --branch HEAD_REF` to find the latest failed run. The required-vs-optional
+filter (Step 3) also needs a PR, so without one just diagnose the latest failed run and make
+clear you're reporting the branch's latest failure, not a confirmed merge blocker.
 
 If *nothing* failed (no failed merge-queue run, all checks green/pending), say so — the
 blocker may be reviews, `mergeStateStatus` (e.g. `BEHIND`, `BLOCKED`), or pending checks.
